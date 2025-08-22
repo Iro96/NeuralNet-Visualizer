@@ -1,0 +1,432 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>AI/ML Model Visualizer</title>
+  <link rel="icon" href="icon.ico" type="image/x-icon">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root{
+      --bg:#0f1720;
+      --panel:#0b1220;
+      --muted:#98a0b3;
+      --accent:#7dd3fc;
+      --success:#10b981;
+      --danger:#fb7185;
+      --card:#0f1724;
+      --glass: rgba(255,255,255,0.03);
+    }
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial; background:linear-gradient(180deg,#07101a 0%, #08121a 100%); color:#e6eef6}
+    #app{display:flex;height:100vh;gap:12px;padding:14px;box-sizing:border-box}
+    .pane{background:var(--panel); border-radius:10px; padding:14px; box-sizing:border-box; overflow:auto; box-shadow: 0 6px 18px rgba(2,6,23,0.6)}
+    #codePane{width:38%; display:flex; flex-direction:column; min-width:320px}
+    #runPane{width:26%; min-width:260px}
+    #vizPane{flex:1; display:flex; flex-direction:column; min-width:340px}
+    h3{margin:4px 0 10px 0; font-weight:600; color:#dbeafe}
+    p{margin:0 0 10px 0; color:var(--muted); font-size:13px}
+    textarea{width:100%; height:calc(100% - 86px); resize:none; background:transparent; border:1px solid rgba(255,255,255,0.04); color:#e6eef6; padding:10px; border-radius:8px; font-family: ui-monospace, Menlo, Consolas; font-size:13px; outline:none; box-shadow: inset 0 1px 0 rgba(255,255,255,0.02)}
+    .controls{display:flex; gap:8px; margin-top:10px; align-items:center}
+    button{background:linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)); color:var(--accent); border:1px solid rgba(255,255,255,0.04); padding:8px 12px; border-radius:8px; cursor:pointer; transition:transform .12s ease, box-shadow .12s ease}
+    button:hover{transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,0.6)}
+    button:active{transform:translateY(0)}
+    button[disabled]{opacity:.45; cursor:not-allowed; transform:none}
+    #dropzone{border:2px dashed rgba(255,255,255,0.04); padding:18px; text-align:center; color:var(--muted); border-radius:8px; background:var(--glass); transition:background .12s ease, border-color .12s ease}
+    #dropzone.drag{background:rgba(125,211,252,0.04); border-color: rgba(125,211,252,0.16); color:var(--accent)}
+    #status, #statusCode{margin-top:10px; font-size:13px; color:var(--muted); min-height:28px}
+    /* Visualization pane */
+    #vizPane .cardHeader{display:flex; justify-content:space-between; align-items:center; gap:10px}
+    #vizPane .legend{font-size:12px; color:var(--muted)}
+    svg{background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.00)); border-radius:8px; overflow:visible}
+    /* Node colors */
+    .node.input { fill:#0fdc7a22; stroke:#0fdc7a; stroke-width:1 }
+    .node.hidden{ fill:#ffffff08; stroke:#94a3b8; stroke-width:1 }
+    .node.output{ fill:#60a5fa11; stroke:#60a5fa; stroke-width:1 }
+    /* transitions */
+    circle.node{ transition:fill-opacity .25s ease, r .12s ease, stroke .12s ease }
+    line.link{ transition:stroke-opacity .18s ease, stroke-width .18s ease }
+    .link.active{ stroke-opacity:0.95 }
+    .layer-label{ font-size:11px; fill:#cfe8ff; opacity:.9 }
+    /* small toast */
+    .toast{ position:fixed; left:50%; transform:translateX(-50%); bottom:26px; background:rgba(0,0,0,0.5); color:#e6eef6; padding:10px 14px; border-radius:10px; border:1px solid rgba(255,255,255,0.04); box-shadow:0 8px 30px rgba(0,0,0,0.6); font-weight:600; display:none; z-index:1000}
+    .toast.show{ display:block; animation: toastIn .28s ease }
+    @keyframes toastIn{ from{opacity:0; transform:translateX(-50%) translateY(6px)} to{opacity:1; transform:translateX(-50%) translateY(0)} }
+    /* subtle svg glow during run */
+    .running svg{ filter: drop-shadow(0 8px 18px rgba(75,85,99,0.12)); }
+    /* small responsive tweaks */
+    @media (max-width:900px){
+      #codePane{display:none}
+      #runPane{width:35%}
+    }
+  </style>
+</head>
+<body>
+<div id="app">
+  <!-- Pane 1: Python code editor -->
+  <div id="codePane" class="pane">
+    <h3 align="center">Python Model Code</h3>
+    <p>Provide <code>build_model()</code> and optional <code>build_example_input(model)</code></p>
+    <p>Notice: Pytorch Only</p>
+    <textarea id="code"></textarea>
+    <div class="controls">
+      <button id="saveCode">Save Code</button>
+    </div>
+    <div id="statusCode"></div>
+  </div>
+
+  <!-- Pane 2: Test Runner -->
+  <div id="runPane" class="pane">
+    <h3 align="center">Test Runner</h3>
+    <p><b>Step 1:</b> Drag & drop your <b>.pth</b> at here.</p>
+    <p><b>Step 2:</b> Then click <b>Prepare</b> and <b>Play</b>.</p>
+    <div id="dropzone">Drop <b>.pth</b> file here</div>
+
+    <div class="controls" style="margin-top:10px">
+      <button id="prepareBtn">Prepare</button>
+      <button id="playBtn" disabled>Play ▶</button>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <!-- Pane 3: Visualization -->
+  <div id="vizPane" class="pane">
+    <div class="cardHeader">
+      <div>
+        <h3 style="margin:0">Model Visualization</h3>
+        <div class="legend">Red=positive weight · Blue=negative</div>
+      </div>
+      <div style="text-align:right; color:var(--muted); font-size:13px">Tip: Small networks display best</div>
+    </div>
+
+    <div style="margin-top:8px; height:12px"></div>
+    <svg id="svg" width="100%" height="86%"></svg>
+  </div>
+</div>
+
+<div id="toast" class="toast">✔ Success</div>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+/* ---------------------------
+   Config & Elements
+   --------------------------- */
+const API = "http://127.0.0.1:8000";
+const codeEl = document.getElementById("code");
+const saveCodeBtn = document.getElementById("saveCode");
+const statusCodeEl = document.getElementById("statusCode");
+
+const dropzone = document.getElementById("dropzone");
+const prepareBtn = document.getElementById("prepareBtn");
+const playBtn = document.getElementById("playBtn");
+const statusEl = document.getElementById("status");
+
+const svg = d3.select("#svg");
+const toast = document.getElementById("toast");
+
+const W = () => svg.node().clientWidth;
+const H = () => svg.node().clientHeight;
+
+let GRAPH = null;
+let ACTIV = {}; // activations per layer
+let runSocket = null;
+
+/* ---------- sample starter code ---------- */
+codeEl.value = `
+import torch
+import torch.nn as nn
+
+# Hi there! This is one of my projects - Cre: Iro96
+# Your model is going here
+
+`;
+
+/* ---------- helpers ---------- */
+function showToast(msg, good=true, ms=1000){
+  toast.textContent = (good? "✔ ":"✖ ") + msg;
+  toast.style.borderColor = good ? "rgba(16,185,129,0.18)" : "rgba(251,113,133,0.18)";
+  toast.classList.add("show");
+  setTimeout(()=> toast.classList.remove("show"), ms);
+}
+function clearStatus(){ statusEl.textContent = ""; statusCodeEl.textContent = ""; }
+function logStatus(el, msg, append=true){
+  if(!append) el.textContent = msg;
+  else el.textContent = (el.textContent ? el.textContent + "\\n" : "") + msg;
+}
+
+/* ---------- API calls ---------- */
+saveCodeBtn.onclick = async () => {
+  clearStatus();
+  const res = await fetch(API + "/api/set_code", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({code: codeEl.value})
+  }).catch(e => ({ ok:false, json: async ()=> ({ok:false, error: String(e)}) }));
+  const j = await res.json();
+  if (!j.ok) {
+    statusCodeEl.style.color = "var(--danger)";
+    statusCodeEl.textContent = "✖ " + (j.error || "Failed to save code");
+  } else {
+    statusCodeEl.style.color = "var(--success)";
+    statusCodeEl.textContent = "Saved code.";
+    showToast("Code saved", true, 1000);
+  }
+};
+
+dropzone.addEventListener("dragover", e => {
+  e.preventDefault();
+  dropzone.classList.add("drag");
+});
+dropzone.addEventListener("dragleave", e => {
+  dropzone.classList.remove("drag");
+});
+dropzone.addEventListener("drop", async e => {
+  e.preventDefault();
+  dropzone.classList.remove("drag");
+  clearStatus();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  if (!file.name.endsWith(".pth")) {
+    logStatus(statusEl, "✖ Only .pth supported.", false);
+    return;
+  }
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(API + "/api/upload_pth", { method:"POST", body: form }).catch(e => ({ ok:false, json: async ()=> ({ok:false, error: String(e)}) }));
+  const j = await res.json();
+  if (!j.ok) {
+    logStatus(statusEl, "✖ " + j.error, false);
+  } else {
+    logStatus(statusEl, "Loaded: " + j.info, false);
+    showToast("File uploaded", true, 1000);
+  }
+});
+
+prepareBtn.onclick = async () => {
+  clearStatus();
+  // call prepare
+  const res = await fetch(API + "/api/prepare", { method:"POST" }).catch(e => ({ ok:false, json: async ()=> ({ok:false, error: String(e)}) }));
+  const j = await res.json();
+  if (!j.ok) {
+    logStatus(statusEl, "✖ " + (j.error || "Prepare failed"), false);
+    playBtn.disabled = true;
+    return;
+  }
+  GRAPH = j.graph;
+  drawGraph(GRAPH);
+  playBtn.disabled = false;
+  // show quick success toast for 1s then hide
+  showToast("Prepared", true, 1000);
+};
+
+playBtn.onclick = async () => {
+  if (!GRAPH) { logStatus(statusEl, "✖ Prepare first.", false); return; }
+  clearStatus();
+
+  let runCount = 0;
+  const maxRuns = 5;
+
+  function runOnce() {
+    // close previous socket if any
+    if (runSocket){
+      try{ runSocket.close(); }catch(e){}
+      runSocket = null;
+    }
+
+    const url = (location.protocol === "https:" ? "wss://" : "ws://") + "127.0.0.1:8000/ws/run";
+    const ws = new WebSocket(url);
+    runSocket = ws;
+    document.querySelector("#vizPane").classList.add("running");
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "tick") {
+        ACTIV = msg.activations || {};
+        updateActivations();
+      } else if (msg.type === "done") {
+        runCount++;
+        logStatus(statusEl, `▶ Run ${runCount} complete`, false);
+        ws.close();
+
+        // reset after next run if any
+        setTimeout(() => {
+          ACTIV = {};
+          updateActivations();
+          document.querySelector("#vizPane").classList.remove("running");
+
+          if (runCount < maxRuns) {
+            runOnce(); // 🔄 start next run
+          } else {
+            showToast("All Tests finished", true, 1500);
+          }
+        }, 1000);
+      } else if (msg.type === "error") {
+        logStatus(statusEl, "✖ " + msg.error, false);
+        ws.close();
+        setTimeout(() => {
+          ACTIV = {};
+          updateActivations();
+          document.querySelector("#vizPane").classList.remove("running");
+        }, 1500);
+      }
+    };
+
+    ws.onopen = () => { logStatus(statusEl, `▶ Running... (Run ${runCount+1}/${maxRuns})`, false); showToast("Running", true, 800); };
+    ws.onerror = () => { logStatus(statusEl, "✖ WebSocket error", false); document.querySelector("#vizPane").classList.remove("running"); };
+    ws.onclose = () => { runSocket = null; };
+  }
+
+  runOnce();
+};
+
+/* ---------- Visualization ---------- */
+let layout = null;
+let layerX = new Map();
+let layerNodeCounts = new Map();
+
+function drawGraph(graph){
+  svg.selectAll("*").remove();
+  layout = null;
+  // layout sizes
+  const margin = {left: 80, right: 40, top: 40, bottom: 40};
+  const width = Math.max(200, W() - margin.left - margin.right);
+  const height = Math.max(200, H() - margin.top - margin.bottom);
+  const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+
+  const layers = graph.nodes;
+  const L = layers.length;
+  const xStep = width / Math.max(1, L - 1);
+
+  layerX = new Map();
+  layerNodeCounts = new Map();
+  layers.forEach((layer, i) => {
+    layerX.set(layer.layer_id, i * xStep);
+    layerNodeCounts.set(layer.layer_id, layer.count);
+  });
+
+  // vertical placement - normalize by max count shown
+  const maxNodesShown = d3.max(layers, d => d.count) || 1;
+  const yScale = d3.scaleLinear().domain([0, maxNodesShown-1]).range([0, height]);
+
+  const nodePositions = {};
+  layers.forEach(layer => {
+    const n = layer.count;
+    const pos = [];
+    const denom = Math.max(1, n-1);
+    for (let i = 0; i < n; i++){
+      const y = denom === 0 ? height/2 : yScale(i * (maxNodesShown-1)/(n-1));
+      pos.push({ y, idx: i });
+    }
+    nodePositions[layer.layer_id] = pos;
+  });
+
+  // build links (downsampled slots)
+  const links = graph.edges.map(e => {
+    const from = e.from_layer, to = e.to_layer;
+    const i = Math.min(e.i, nodePositions[from].length-1);
+    const j = Math.min(e.j, nodePositions[to].length-1);
+    return { from, to, i, j, w: e.w,
+             x1: layerX.get(from), y1: nodePositions[from][i].y,
+             x2: layerX.get(to),   y2: nodePositions[to][j].y };
+  });
+
+  // stroke width mapping (keep thin)
+  const absVals = links.map(d => Math.abs(d.w)).sort(d3.ascending);
+  const q95 = absVals[Math.floor(absVals.length * 0.95)] || (absVals[absVals.length-1] || 1e-6);
+  const weightToWidth = d3.scaleLinear().domain([0, q95 || 1e-6]).range([0.3, 4.0]);
+
+  // links group
+  const linkSel = g.append("g").attr("class","links").selectAll("line")
+    .data(links)
+    .join("line")
+    .attr("class","link")
+    .attr("x1",d=>d.x1).attr("y1",d=>d.y1)
+    .attr("x2",d=>d.x2).attr("y2",d=>d.y2)
+    .attr("stroke", d=> d.w >= 0 ? "#fb7185" : "#60a5fa")
+    .attr("stroke-opacity", 0.18)
+    .attr("stroke-width", d=> Math.max(0.3, weightToWidth(Math.abs(d.w))));
+
+  // nodes group
+  const nodeGroups = g.append("g").attr("class","nodes");
+  const nodeSel = [];
+  layers.forEach((layer, idx) => {
+    const kind = idx === 0 ? "input" : (idx === layers.length-1 ? "output" : "hidden");
+    const nodes = nodeGroups.selectAll(`.node-${layer.layer_id}`)
+      .data(nodePositions[layer.layer_id])
+      .join("circle")
+      .attr("class", `node ${kind}`)
+      .attr("cx", layerX.get(layer.layer_id))
+      .attr("cy", d=>d.y)
+      .attr("r", 4)
+      .attr("fill-opacity", 0.25);
+
+    nodeSel.push({ layer_id: layer.layer_id, selection: nodes, kind });
+
+    // label
+    g.append("text").attr("class","layer-label")
+      .attr("x", layerX.get(layer.layer_id))
+      .attr("y", -10)
+      .attr("text-anchor","middle")
+      .text(`${layer.label} (${layer.count})`);
+  });
+
+  layout = { g, links: linkSel, nodes: nodeSel, layers, graph, weightToWidth, nodePositions, layerX };
+  updateActivations();
+}
+
+function updateActivations(){
+  if (!layout || !GRAPH) return;
+
+  // nodes
+  layout.nodes.forEach(entry => {
+    const { layer_id, selection } = entry;
+    const acts = (ACTIV && ACTIV[layer_id]) ? ACTIV[layer_id] : null;
+
+    let opacities = [];
+    if (acts && acts.length){
+      const maxA = Math.max(1e-9, ...acts.map(Math.abs));
+      opacities = acts.map(a => 0.25 + 0.75 * (Math.abs(a) / maxA));
+    }
+
+    selection
+      .transition().duration(160)
+      .attr("fill-opacity", (d,i) => {
+        if (!opacities.length) return 0.18;
+        return opacities[Math.min(i, opacities.length-1)];
+      })
+      .attr("r", (d,i) => {
+        if (!opacities.length) return 4;
+        return 3 + 3*(Math.min(1, opacities[Math.min(i, opacities.length-1)]));
+      });
+  });
+
+  // edges: mark as active if |w| * src_act > threshold
+  layout.links
+    .classed("active", d => {
+      const srcActs = ACTIV[d.from] || [];
+      const a = srcActs[Math.min(d.i, srcActs.length-1)] || 0;
+      return Math.abs(a * d.w) > 1e-6;
+    })
+    .transition().duration(140)
+    .attr("stroke-opacity", d => {
+      const srcActs = ACTIV[d.from] || [];
+      const a = srcActs[Math.min(d.i, srcActs.length-1)] || 0;
+      return Math.abs(a * d.w) > 1e-6 ? 0.9 : 0.12;
+    })
+    .attr("stroke-width", d => {
+      const base = layout.weightToWidth(Math.abs(d.w));
+      const srcActs = ACTIV[d.from] || [];
+      const a = srcActs[Math.min(d.i, srcActs.length-1)] || 0;
+      return Math.max(0.3, base * (1 + Math.min(2, Math.abs(a)*4)));
+    });
+}
+
+/* --- resize handling --- */
+let resizeTimer = null;
+window.addEventListener("resize", ()=> {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(()=> { if (GRAPH) drawGraph(GRAPH); }, 200);
+});
+
+</script>
+</body>
+</html>
